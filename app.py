@@ -2,148 +2,113 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import pickle
-from io import BytesIO
+from pathlib import Path
 
-st.set_page_config(page_title="Pumpkin Seed Classifier", layout="centered")
-st.title("🎃 Pumpkin Seed Classifier BY TrainwithPrasadM — Web App")
-st.write("Load your trained model (Pickle) or use the model file available at `/mnt/data/Pumpkin_seed_model.pkl` and predict seed classes from measured features.")
+st.set_page_config(page_title="Pumpkin Seed Classifier", page_icon="🎃", layout="centered")
 
-# Feature list (must match the order used for training)
-FEATURES = [
-    "Area",
-    "Perimeter",
-    "Major_Axis_Length",
-    "Minor_Axis_Length",
-    "Convex_Area",
-    "Equiv_Diameter",
-    "Eccentricity",
-    "Solidity",
-    "Extent",
-    "Roundness",
-    "Aspect_Ration",
-    "Compactness",
-]
+st.title("🎃 Pumpkin Seed Classifier")
+st.write("Upload features or enter them manually to predict the seed class with your trained model.")
 
-# Try to load model from known path first
-MODEL_PATH = "/mnt/data/Pumpkin_seed_model.pkl"
-model = None
-try:
+MODEL_PATH = Path("Pumpkin_seed_model.pkl")
+
+@st.cache_resource
+def load_model():
+    if not MODEL_PATH.exists():
+        st.error("Model file not found: {MODEL_PATH}. Please place your 'Pumpkin_seed_model.pkl' in the same folder as this app.")
+        return None
     with open(MODEL_PATH, "rb") as f:
         model = pickle.load(f)
-        st.sidebar.success(f"Loaded model from {MODEL_PATH}")
-except Exception as e:
-    st.sidebar.info("No model found at /mnt/data/Pumpkin_seed_model.pkl")
+    return model
 
-# Allow user to upload a model if not found or if they prefer their own
-uploaded_model = st.sidebar.file_uploader("Upload a Pickle (.pkl) model (optional)", type=["pkl"])
-if uploaded_model is not None:
-    try:
-        model = pickle.load(uploaded_model)
-        st.sidebar.success("Model uploaded and loaded successfully")
-    except Exception as e:
-        st.sidebar.error("Uploaded file could not be loaded as a pickle model. Make sure it's a valid sklearn-compatible pickle.")
+model = load_model()
 
-if model is None:
-    st.warning("No model is loaded. Please upload a .pkl model or place it at /mnt/data/Pumpkin_seed_model.pkl on the server.")
+FEATURES = ["Area", "Perimeter", "Major_Axis_Length", "Minor_Axis_Length", "Convex_Area", "Equiv_Diameter", "Eccentricity", "Solidity", "Extent", "Roundness", "Aspect_Ration", "Compactness"]
 
-st.markdown("---")
-
-st.header("Single sample prediction")
-cols = st.columns(2)
-# default values taken from user's sample training row (first row)
-defaults = {
-    "Area": 56276.0,
-    "Perimeter": 888.242,
-    "Major_Axis_Length": 326.1485,
-    "Minor_Axis_Length": 220.2388,
-    "Convex_Area": 56831.0,
-    "Equiv_Diameter": 267.6805,
-    "Eccentricity": 0.7376,
-    "Solidity": 0.9902,
-    "Extent": 0.7453,
-    "Roundness": 0.8963,
-    "Aspect_Ration": 1.4809,
-    "Compactness": 0.8207,
-}
-
-inputs = {}
-for i, feat in enumerate(FEATURES):
-    c = cols[i % 2]
-    val = c.number_input(feat, value=float(defaults.get(feat, 0.0)), format="%.6f")
-    inputs[feat] = val
-
-if st.button("Predict single sample"):
-    if model is None:
-        st.error("No model loaded. Upload or place model at /mnt/data/Pumpkin_seed_model.pkl")
+def predict(df: pd.DataFrame):
+    # Keep only the expected features in the right order
+    X = df[[*FEATURES]].copy()
+    # Convert to numeric and handle issues
+    for col in X.columns:
+        X[col] = pd.to_numeric(X[col], errors="coerce")
+    if X.isna().any().any():
+        st.warning("Some values could not be parsed to numbers. They are NaN now and will stop prediction.")
+        raise ValueError("NaN values in input features")
+    # Predict
+    if hasattr(model, "predict_proba"):
+        proba = model.predict_proba(X)
+        preds = (proba[:, 1] >= 0.5).astype(int) if proba.shape[1] == 2 else model.predict(X)
+        return preds, proba
     else:
-        X = pd.DataFrame([inputs], columns=FEATURES)
+        preds = model.predict(X)
+        proba = None
+        return preds, proba
+
+with st.sidebar:
+    st.header("About")
+    st.markdown(
+        "This app loads **Pumpkin_seed_model.pkl** and predicts the **Class** (e.g., 0/1).\n"
+        "Columns expected:\n"
+        f"- " + "\n- ".join(FEATURES)
+    )
+    st.markdown("---")
+    st.markdown("**Tip:** Use the *Sample CSV* below to test quickly.")
+
+tab1, tab2 = st.tabs(["📥 CSV / Batch", "✍️ Manual Entry"])
+
+with tab1:
+    st.subheader("Batch prediction via CSV")
+    st.write("Upload a CSV with these columns (order can vary):")
+    st.code(",".join(FEATURES), language="text")
+    sample = pd.DataFrame([{
+        "Area": 56276, "Perimeter": 888.242, "Major_Axis_Length": 326.1485, "Minor_Axis_Length": 220.2388,
+        "Convex_Area": 56831, "Equiv_Diameter": 267.6805, "Eccentricity": 0.7376, "Solidity": 0.9902,
+        "Extent": 0.7453, "Roundness": 0.8963, "Aspect_Ration": 1.4809, "Compactness": 0.8207
+    }])
+    st.download_button("Download sample_input.csv", sample.to_csv(index=False).encode("utf-8"), "sample_input.csv", "text/csv")
+
+    file = st.file_uploader("Upload CSV", type=["csv"])
+    if file is not None and model is not None:
         try:
-            pred = model.predict(X)
-            st.success(f"Predicted class: {pred[0]}")
-            # show probabilities if available
-            if hasattr(model, "predict_proba"):
-                proba = model.predict_proba(X)
-                proba_df = pd.DataFrame(proba, columns=[f"class_{i}" for i in range(proba.shape[1])])
-                st.table(proba_df)
+            df = pd.read_csv(file)
+            missing = [c for c in FEATURES if c not in df.columns]
+            if missing:
+                st.error(f"Missing required columns: {missing}")
+            else:
+                preds, proba = predict(df)
+                out = df.copy()
+                out["Predicted_Class"] = preds
+                if proba is not None and proba.ndim == 2 and proba.shape[1] >= 2:
+                    out["Probability_Class_1"] = proba[:, 1]
+                st.success("Predictions complete.")
+                st.dataframe(out.head(50))
+                st.download_button("Download predictions CSV", out.to_csv(index=False).encode("utf-8"), "predictions.csv", "text/csv")
         except Exception as e:
-            st.error(f"Model prediction failed: {e}")
+            st.exception(e)
+
+with tab2:
+    st.subheader("Manual single prediction")
+    st.write("Enter feature values:")
+    cols = st.columns(3)
+    values = {}
+    defaults = {
+        "Area": 56276, "Perimeter": 888.242, "Major_Axis_Length": 326.1485, "Minor_Axis_Length": 220.2388,
+        "Convex_Area": 56831, "Equiv_Diameter": 267.6805, "Eccentricity": 0.7376, "Solidity": 0.9902,
+        "Extent": 0.7453, "Roundness": 0.8963, "Aspect_Ration": 1.4809, "Compactness": 0.8207
+    }
+    for i, feat in enumerate(FEATURES):
+        with cols[i % 3]:
+            # Use number_input with float default
+            values[feat] = st.number_input(feat, value=float(defaults.get(feat, 0.0)))
+
+    if st.button("Predict", type="primary") and model is not None:
+        row = pd.DataFrame([values], columns=FEATURES)
+        try:
+            preds, proba = predict(row)
+            st.success(f"Predicted Class: {int(preds[0])}")
+            if proba is not None and proba.ndim == 2 and proba.shape[1] >= 2:
+                st.write(f"Probability of Class 1: {float(proba[0,1]):.4f}")
+        except Exception as e:
+            st.exception(e)
 
 st.markdown("---")
-
-st.header("Batch prediction from CSV")
-st.write("Upload a CSV with the exact feature columns (order not important) and get predictions for each row.")
-uploaded_csv = st.file_uploader("Upload CSV for batch prediction", type=["csv"] , key="csv")
-
-if uploaded_csv is not None:
-    try:
-        df = pd.read_csv(uploaded_csv)
-        st.write("Preview of uploaded data:")
-        st.dataframe(df.head())
-
-        missing = [f for f in FEATURES if f not in df.columns]
-        if missing:
-            st.error(f"CSV is missing these required columns: {missing}")
-        else:
-            if st.button("Run batch prediction"):
-                if model is None:
-                    st.error("No model loaded. Upload or place model at /mnt/data/Pumpkin_seed_model.pkl")
-                else:
-                    X = df[FEATURES]
-                    try:
-                        preds = model.predict(X)
-                        out = df.copy()
-                        out["predicted_class"] = preds
-                        # add probabilities if available
-                        if hasattr(model, "predict_proba"):
-                            proba = model.predict_proba(X)
-                            for i in range(proba.shape[1]):
-                                out[f"prob_class_{i}"] = proba[:, i]
-                        st.success("Batch prediction completed")
-                        st.dataframe(out.head())
-
-                        # provide download
-                        towrite = BytesIO()
-                        out.to_csv(towrite, index=False)
-                        towrite.seek(0)
-                        st.download_button("Download predictions as CSV", data=towrite, file_name="pumpkin_predictions.csv", mime="text/csv")
-                    except Exception as e:
-                        st.error(f"Prediction failed: {e}")
-    except Exception as e:
-        st.error(f"Failed to read CSV: {e}")
-
-st.markdown("---")
-
-st.header("Notes & Tips")
-st.markdown(
-    """
-- Make sure the model was trained with the **exact same feature names** listed in the app. If your training pipeline used a different column order or feature names, either adapt the app or retrain.
-- If the model expects scaled features (StandardScaler, MinMax), the model pickle should already include any preprocessing (Pipeline). Prefer saving a `Pipeline` that includes preprocessing + estimator.
-- To deploy on a server (Render/Heroku/etc.):
-  1. Include this file and `Pumpkin_seed_model.pkl` in the project repository (or upload the model at startup).
-  2. Add a `requirements.txt` listing `streamlit`, `scikit-learn`, `pandas`, `numpy` and other libs used.
-  3. Run with `streamlit run pumpkin_seed_streamlit_app.py --server.port $PORT` (platforms usually give `$PORT`).
-
-"""
-)
-
-st.write("If you'd like, I can also generate a simple `requirements.txt`, a `Dockerfile`, or a Flask alternative for deployment.")
+st.caption("Built with Streamlit. Place your **Pumpkin_seed_model.pkl** next to this script and run: `streamlit run app.py`.")
