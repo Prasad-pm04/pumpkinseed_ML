@@ -4,7 +4,7 @@ import numpy as np
 import pickle
 from pathlib import Path
 
-st.set_page_config(page_title="Pumpkin Seed Classifier", page_icon="🎃", layout="centered")
+st.set_page_config(page_title="Pumpkin Seed Classifier BY TrainWithPrasadPM", page_icon="🎃", layout="centered")
 
 st.title("🎃 Pumpkin Seed Classifier")
 st.write("Upload features or enter them manually to predict the seed class with your trained model.")
